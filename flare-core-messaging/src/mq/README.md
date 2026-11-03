@@ -2,7 +2,7 @@
 
 ## 概述
 
-`flare-server-core/mq` 模块提供了一个工业级的统一 MQ 框架，支持生产者和消费者，支持 NATS JetStream，具有以下特性：
+`flare-server-runtime/mq` 模块提供了一个工业级的统一 MQ 框架，支持生产者和消费者，支持 NATS JetStream，具有以下特性：
 
 - **统一接口**: Producer 和 Consumer 使用统一的接口设计
 - **多 MQ 支持**: NATS JetStream

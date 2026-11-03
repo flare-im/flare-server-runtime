@@ -116,7 +116,7 @@ impl Default for LoggingSubscriberOptions {
 
 /// 无 `RUST_LOG` 时：业务用 `level`，第三方库降噪。
 ///
-/// 与 `flare-im-core/scripts/start_server.sh` 中默认 `RUST_LOG` 保持同类项一致，避免本地 `logs/` 被
+/// 与 `flare-core-server/scripts/start_server.sh` 中默认 `RUST_LOG` 保持同类项一致，避免本地 `logs/` 被
 /// `sqlx` / `tokio` / NATS / gRPC 栈在 `trace` 下刷到数 GB。
 fn default_env_filter(app_level: &str) -> EnvFilter {
     let s = format!(

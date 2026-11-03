@@ -8,7 +8,7 @@
 //!
 //! ```bash
 //! # 密钥必须与服务端一致 —— start_server.sh 生成的那把在 logs/.dev-token-secret
-//! export FLARE_TOKEN_SECRET="$(cat ../flare-im-core/logs/.dev-token-secret)"
+//! export FLARE_TOKEN_SECRET="$(cat ../flare-core-server/logs/.dev-token-secret)"
 //! cargo run --example mint_token -- alice
 //!
 //! # 指定租户与有效期
@@ -30,7 +30,7 @@
 use flare_server_core::TokenService;
 
 /// 服务端没有内置默认密钥 —— `scripts/start_server.sh` 会随机生成一把存进
-/// `flare-im-core/logs/.dev-token-secret`，并注入给各网关。所以本工具**必须**
+/// `flare-core-server/logs/.dev-token-secret`，并注入给各网关。所以本工具**必须**
 /// 用同一把密钥签发，否则验签必失败（表现为接口 401）。
 ///
 /// 这里保留一个兜底常量只是为了在未提供密钥时给出明确报错，而不是静默签出
@@ -132,11 +132,11 @@ fn print_usage() {
 环境变量:
     FLARE_TOKEN_SECRET   签名密钥（**必填**），必须与服务端一致。
                          start_server.sh 生成的那把在
-                         flare-im-core/logs/.dev-token-secret
+                         flare-core-server/logs/.dev-token-secret
     FLARE_TOKEN_ISSUER   签发者（默认 "flare-im-core"，与网关配置一致）
 
 示例:
-    export FLARE_TOKEN_SECRET="$(cat ../flare-im-core/logs/.dev-token-secret)"
+    export FLARE_TOKEN_SECRET="$(cat ../flare-core-server/logs/.dev-token-secret)"
     TOKEN=$(cargo run -q --example mint_token -- alice)
     curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:50050/api/v1/..."#
     );

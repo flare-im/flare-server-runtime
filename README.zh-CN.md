@@ -4,14 +4,14 @@
 
 > ## ⚠ 请与同级仓库一起 clone
 
-本 crate 通过**路径依赖**引用 `../flare-proto`。单独 clone 这一个仓是编译不过的——
+本 crate 通过**路径依赖**引用 `../flare-protocol`。单独 clone 这一个仓是编译不过的——
 `cargo metadata` 在读到你的代码之前就会失败，而报错指向一个内部工作区成员，
 完全看不出真正的原因。
 
 ```bash
 mkdir flare && cd flare
-git clone https://github.com/flare-im/flare-proto.git
-git clone https://github.com/flare152/flare-server-core.git
+git clone https://github.com/flare-im/flare-protocol.git
+git clone https://github.com/flare-im/flare-server-runtime.git
 cd flare-server-core && cargo check
 ```
 
@@ -28,7 +28,7 @@ cd flare-server-core && cargo check
 > - **`HttpHookTokenValidator`** —— 把 token POST 到你自己的接口，
 >   **这是接入自有用户体系的入口**。
 >
-> 业务规则同理：`flare-im-core/crates/flare-im-hooks` 提供 9 个扩展点
+> 业务规则同理：`flare-core-server/crates/flare-im-hooks` 提供 9 个扩展点
 > （PreSend / PostSend / Delivery / Recall / MessageRead / MessageReaction /
 > ConversationLifecycle / ConversationMember / GetConversationParticipants）。
 >
@@ -185,7 +185,7 @@ passed。目前只有 etcd（`localhost:2379`）与 Consul（`localhost:8500`）
 
 | 想做什么 | 去哪里 |
 |---|---|
-| **五分钟跑起来** | [QUICKSTART](https://github.com/flare-im/flare-im-core-server/blob/main/QUICKSTART.md) —— 起服务、手签 token、调通接口，**不需要自建用户体系** |
+| **五分钟跑起来** | [QUICKSTART](https://github.com/flare-im/flare-core-server/blob/main/QUICKSTART.md) —— 起服务、手签 token、调通接口，**不需要自建用户体系** |
 | 接入自己的用户系统 | 实现 `TokenValidator`（`CoreJwtTokenValidator` 本地验签 / `HttpHookTokenValidator` 调你的接口） |
 | 加自己的业务规则 | `flare-im-hooks` 的 9 个扩展点：PreSend / PostSend / Delivery / Recall / MessageRead / MessageReaction / ConversationLifecycle / ConversationMember / GetConversationParticipants |
 | 做界面 | [`@flare-im/vue-ui`](https://www.npmjs.com/package/@flare-im/vue-ui) —— 107 个组件，四端一致的契约 |
@@ -200,5 +200,5 @@ passed。目前只有 etcd（`localhost:2379`）与 Consul（`localhost:8500`）
 
 咨询：`flare1522@163.com`
 
-> 边界划分与不变承诺见 [GOVERNANCE](https://github.com/flare-im/flare-im-core-server/blob/main/.github/GOVERNANCE.md)。
+> 边界划分与不变承诺见 [GOVERNANCE](https://github.com/flare-im/flare-core-server/blob/main/.github/GOVERNANCE.md)。
 > 简言之：**已开源的不会被收回，鉴权与 hooks 契约永远开源、不会为逼迫付费而阉割。**

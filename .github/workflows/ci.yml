@@ -27,7 +27,7 @@ jobs:
             git clone --depth 1 -b "$BR" "$1" "$2" 2>/dev/null \
               || git clone --depth 1 "$1" "$2"
           }
-          clone https://github.com/flare-im/flare-proto.git "../flare-proto"
+          clone https://github.com/flare-im/flare-protocol.git "../flare-protocol"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -79,7 +79,7 @@ jobs:
             git clone --depth 1 -b "$BR" "$1" "$2" 2>/dev/null \
               || git clone --depth 1 "$1" "$2"
           }
-          clone https://github.com/flare-im/flare-proto.git "../flare-proto"
+          clone https://github.com/flare-im/flare-protocol.git "../flare-protocol"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 

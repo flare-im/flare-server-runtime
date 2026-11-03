@@ -1,7 +1,7 @@
 //! 接入 token 的签发与刷新（生命周期实现，网关只做路由）。
 //!
 //! 客户端从此不再本地签发：core-only 形态由网关调用这里签发/刷新；
-//! `http_hook` 形态转发给业务认证系统。见 `flare-im-core/docs/AUTH-TOKEN-ISSUANCE.zh-CN.md`。
+//! `http_hook` 形态转发给业务认证系统。见 `flare-core-server/docs/AUTH-TOKEN-ISSUANCE.zh-CN.md`。
 
 use std::{sync::Arc, time::Duration};
 

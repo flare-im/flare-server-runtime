@@ -14,8 +14,8 @@ edition = "2024"
 rust-version = "1.94.0"
 authors = ["Flare Team"]
 license = "Apache-2.0"
-repository = "https://github.com/flare152/flare-server-core"
-homepage = "https://github.com/flare152/flare-server-core"
+repository = "https://github.com/flare-im/flare-server-runtime"
+homepage = "https://github.com/flare-im/flare-server-runtime"
 
 [workspace.dependencies]
 # ===== 异步运行时 =====
@@ -92,7 +92,7 @@ flare-core-messaging = { version = "1.1.0", path = "flare-core-messaging" }
 flare-core-runtime = { version = "1.1.0", path = "flare-core-runtime" }
 
 # ===== Proto =====
-flare-proto = { version = "2.0.1", path = "../flare-proto" }
+flare-proto = { version = "2.0.1", path = "../flare-protocol" }
 
 [package]
 name = "flare-server-core"
