@@ -39,6 +39,11 @@
   `/dispatch`，所需权限码是 `plugin:<plugin_id>:<permission>`
   （`PLUGIN_ADMIN_PERMISSION_TEMPLATE`，permission 段须满足
   `valid_plugin_permission`），不再是固定的 `plugin:<plugin_id>:admin`。
+- Consul 发现默认只返回健康检查通过的实例：`CONSUL_PASSING_ONLY` 未设置时视为 `true`
+  （此前默认 `false`）。健康检查已失败、尚未到 `DeregisterCriticalServiceAfter` 的实例
+  不再被选中；要恢复旧行为，显式设 `CONSUL_PASSING_ONLY=false`（`0`/`no`/`off` 同义）。
+  注册时 `ServiceInstance.metadata` 的 `region`、`zone` 同时写进 Consul `Meta`，发现时
+  读回实例元数据（只有同名标签的旧实例按标签读）。
 
 ### 安全
 

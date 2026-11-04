@@ -431,6 +431,7 @@ impl DiscoveryBackend for ConsulBackend {
             "ID": instance.instance_id,
             "Name": instance.service_type,
             "Tags": tags,
+            "Meta": instance_meta(&instance),
             "Address": service_address,
             "Port": instance.address.port(),
             "Check": check
@@ -533,6 +534,53 @@ impl DiscoveryBackend for ConsulBackend {
     }
 }
 
+/// `CONSUL_PASSING_ONLY`：发现时是否只要健康检查通过的实例。默认只要通过的——否则健康检查已经
+/// 失败、但还没到 `DeregisterCriticalServiceAfter` 的实例（宕机的网关最长要等 TTL × 2）仍会被选中，
+/// 调用方一直往死实例上连。显式设 `false`/`0`/`no`/`off` 才返回全部实例（排查用）。
+fn passing_only_from(value: Option<&str>) -> bool {
+    !matches!(
+        value
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("false" | "0" | "no" | "off")
+    )
+}
+
+/// 注册时随实例写进 Consul `Meta` 的元数据：region / zone 是一等字段（不只是标签），
+/// 发现方按可用区挑实例、运维在 Consul 里查看都读它。
+fn instance_meta(instance: &ServiceInstance) -> serde_json::Map<String, serde_json::Value> {
+    let mut meta = serde_json::Map::new();
+    let fields = [
+        ("region", instance.metadata.region.as_deref()),
+        ("zone", instance.metadata.zone.as_deref()),
+    ];
+    for (key, value) in fields {
+        if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+            meta.insert(
+                key.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
+        }
+    }
+    meta
+}
+
+/// 发现结果里的 region / zone：优先 `Meta`，其次同名标签（老版本只写标签）。
+fn apply_location_metadata(instance: &mut ServiceInstance, service: &serde_json::Value) {
+    let meta = service.get("Meta");
+    let pick = |key: &str, tags: &HashMap<String, String>| {
+        meta.and_then(|meta| meta.get(key))
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .or_else(|| tags.get(key).cloned())
+            .filter(|value| !value.is_empty())
+    };
+    let region = pick("region", &instance.tags);
+    let zone = pick("zone", &instance.tags);
+    instance.metadata.region = region;
+    instance.metadata.zone = zone;
+}
+
 impl ConsulBackend {
     async fn discover_uncached(
         &self,
@@ -541,8 +589,7 @@ impl ConsulBackend {
         version: Option<&str>,
         tags: Option<&HashMap<String, String>>,
     ) -> Result<Vec<ServiceInstance>, Box<dyn std::error::Error + Send + Sync>> {
-        let passing_only =
-            std::env::var("CONSUL_PASSING_ONLY").unwrap_or_else(|_| "false".to_string()) == "true";
+        let passing_only = passing_only_from(std::env::var("CONSUL_PASSING_ONLY").ok().as_deref());
 
         let url = format!("{}/v1/health/service/{}", self.consul_url, service_type);
         let mut query_params = vec![];
@@ -659,6 +706,7 @@ impl ConsulBackend {
                     }
                 }
             }
+            apply_location_metadata(&mut instance, service);
 
             let instance_tags: Vec<String> = instance
                 .tags
@@ -703,5 +751,69 @@ impl ConsulBackend {
         );
 
         Ok(instances)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 默认只要健康检查通过的实例；只有显式关掉才返回全部。
+    #[test]
+    fn passing_only_is_the_default_and_can_be_disabled_explicitly() {
+        assert!(passing_only_from(None));
+        for enabled in ["true", "1", "TRUE", "", "yes", "unexpected"] {
+            assert!(passing_only_from(Some(enabled)), "{enabled:?}");
+        }
+        for disabled in ["false", "0", "no", "off", " False "] {
+            assert!(!passing_only_from(Some(disabled)), "{disabled:?}");
+        }
+    }
+
+    /// region / zone 随注册写进 Meta，发现时读回实例元数据（老实例只有标签时读标签）。
+    #[test]
+    fn region_and_zone_round_trip_through_consul_meta() {
+        let mut instance = ServiceInstance::new(
+            "access-gateway",
+            "gateway-a",
+            "127.0.0.1:60052".parse().unwrap(),
+        );
+        instance.metadata.region = Some("cn-north".into());
+        instance.metadata.zone = Some("az-1".into());
+        let meta = instance_meta(&instance);
+        assert_eq!(
+            meta.get("region").and_then(|v| v.as_str()),
+            Some("cn-north")
+        );
+        assert_eq!(meta.get("zone").and_then(|v| v.as_str()), Some("az-1"));
+
+        let service = serde_json::json!({ "Meta": meta });
+        let mut discovered = ServiceInstance::new(
+            "access-gateway",
+            "gateway-a",
+            "127.0.0.1:60052".parse().unwrap(),
+        );
+        apply_location_metadata(&mut discovered, &service);
+        assert_eq!(discovered.metadata.region.as_deref(), Some("cn-north"));
+        assert_eq!(discovered.metadata.zone.as_deref(), Some("az-1"));
+
+        let legacy = serde_json::json!({});
+        let mut tagged = ServiceInstance::new(
+            "access-gateway",
+            "gateway-b",
+            "127.0.0.1:60052".parse().unwrap(),
+        )
+        .with_tag("zone", "az-2");
+        apply_location_metadata(&mut tagged, &legacy);
+        assert_eq!(tagged.metadata.zone.as_deref(), Some("az-2"));
+        assert_eq!(tagged.metadata.region, None);
+
+        // 未配置 region / zone 的实例不写 Meta 字段。
+        let bare = ServiceInstance::new(
+            "access-gateway",
+            "gateway-c",
+            "127.0.0.1:60052".parse().unwrap(),
+        );
+        assert!(instance_meta(&bare).is_empty());
     }
 }
