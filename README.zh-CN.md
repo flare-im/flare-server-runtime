@@ -1,6 +1,6 @@
 # Flare Server Core
 
-[English](README.md) · 中文
+[English](README.md) · 简体中文
 
 > ## ⚠ 请与同级仓库一起 clone
 
@@ -185,7 +185,7 @@ passed。目前只有 etcd（`localhost:2379`）与 Consul（`localhost:8500`）
 
 | 想做什么 | 去哪里 |
 |---|---|
-| **五分钟跑起来** | [QUICKSTART](https://github.com/flare-im/flare-core-server/blob/main/QUICKSTART.md) —— 起服务、手签 token、调通接口，**不需要自建用户体系** |
+| **五分钟跑起来** | [QUICKSTART](https://github.com/flare-im/flare-core-server/blob/main/docs/QUICKSTART.zh-CN.md) —— 起服务、手签 token、调通接口，**不需要自建用户体系** |
 | 接入自己的用户系统 | 实现 `TokenValidator`（`CoreJwtTokenValidator` 本地验签 / `HttpHookTokenValidator` 调你的接口） |
 | 加自己的业务规则 | `flare-im-hooks` 的 9 个扩展点：PreSend / PostSend / Delivery / Recall / MessageRead / MessageReaction / ConversationLifecycle / ConversationMember / GetConversationParticipants |
 | 做界面 | [`@flare-im/vue-ui`](https://www.npmjs.com/package/@flare-im/vue-ui) —— 107 个组件，四端一致的契约 |
@@ -202,3 +202,7 @@ passed。目前只有 etcd（`localhost:2379`）与 Consul（`localhost:8500`）
 
 > 边界划分与不变承诺见 [GOVERNANCE](https://github.com/flare-im/flare-core-server/blob/main/.github/GOVERNANCE.md)。
 > 简言之：**已开源的不会被收回，鉴权与 hooks 契约永远开源、不会为逼迫付费而阉割。**
+
+## 扩展入口
+
+本仓负责服务进程复用的基础设施。[Core](https://github.com/flare-im/flare-core-server) 负责消息行为，[插件 DevKit](https://github.com/flare-im/flare-plugin-devkit) 负责公开插件宿主契约。
