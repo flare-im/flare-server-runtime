@@ -244,7 +244,7 @@ pub const TOKEN_USE_CONTROL: &str = "control";
 /// 核 admin-gateway 管理令牌的 `token_use` 取值:校验后派生 `admin:*` scope。
 pub const TOKEN_USE_ADMIN: &str = "admin";
 
-/// Audience, issuer and purpose are fixed for cell-internal gRPC identity.
+/// Default audience, issuer and purpose for cell-internal gRPC identity.
 pub const INTERNAL_CONTEXT_ISSUER: &str = "flare-internal";
 pub const INTERNAL_CONTEXT_AUDIENCE: &str = "flare-internal";
 pub const TOKEN_USE_INTERNAL_CONTEXT: &str = "internal_context";
@@ -277,6 +277,8 @@ pub struct SignedContextIdentity {
     pub request_id: String,
     /// Staff only: the organization the staff member belongs to; None for platform staff.
     pub org_id: Option<String>,
+    /// Staff only: an explicitly authorized organization management target. Membership is not authority.
+    pub organization_scope: Option<String>,
     /// Staff only: the permission code the admin partition matched for this request.
     pub permission: Option<String>,
     /// Staff only: the role bundle version the session was authorized against.
@@ -307,6 +309,7 @@ impl SignedContextIdentity {
             credential_id: None,
             request_id: request_id.into(),
             org_id: None,
+            organization_scope: None,
             permission: None,
             perm_version: None,
             trace_id: None,
@@ -347,6 +350,11 @@ impl SignedContextIdentity {
         self
     }
 
+    pub fn with_organization_scope(mut self, organization: impl Into<String>) -> Self {
+        self.organization_scope = Some(organization.into());
+        self
+    }
+
     pub fn with_roles(mut self, roles: Vec<String>) -> Self {
         self.roles = roles;
         self
@@ -370,6 +378,9 @@ impl SignedContextIdentity {
         let tenant_ok = valid(&self.tenant_id, 256) || (staff && self.tenant_id.is_empty());
         let grant_ok = if staff {
             self.org_id.as_deref().is_none_or(|id| valid(id, 256))
+                && self.organization_scope.as_deref().is_none_or(|id| {
+                    valid(id, 128) && self.org_id.as_deref().is_none_or(|member| member == id)
+                })
                 && self
                     .permission
                     .as_deref()
@@ -380,6 +391,7 @@ impl SignedContextIdentity {
                     .is_none_or(|reason| super::stated_reason::stated_reason(reason) == Ok(reason))
         } else {
             self.org_id.is_none()
+                && self.organization_scope.is_none()
                 && self.permission.is_none()
                 && self.perm_version.is_none()
                 && self.reason.is_none()
@@ -430,6 +442,8 @@ pub struct SignedContextClaims {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perm_version: Option<u64>,
@@ -449,7 +463,7 @@ pub struct SignedContextClaims {
 }
 
 impl SignedContextClaims {
-    fn validate(&self, now: u64) -> Result<()> {
+    fn validate(&self, now: u64, audience: &str, token_use: &str) -> Result<()> {
         SignedContextIdentity {
             actor_type: self.actor_type,
             actor_id: self.actor_id.clone(),
@@ -458,6 +472,7 @@ impl SignedContextClaims {
             credential_id: self.credential_id.clone(),
             request_id: self.request_id.clone(),
             org_id: self.org_id.clone(),
+            organization_scope: self.organization_scope.clone(),
             permission: self.permission.clone(),
             perm_version: self.perm_version,
             trace_id: self.trace_id.clone(),
@@ -467,8 +482,8 @@ impl SignedContextClaims {
         .validate()?;
         if self.sub != self.actor_id
             || self.iss != INTERNAL_CONTEXT_ISSUER
-            || self.aud != INTERNAL_CONTEXT_AUDIENCE
-            || self.token_use != TOKEN_USE_INTERNAL_CONTEXT
+            || self.aud != audience
+            || self.token_use != token_use
             || Uuid::parse_str(&self.jti).is_err()
             || self.iat > now
             || self.exp <= now
@@ -487,7 +502,21 @@ impl SignedContextClaims {
 /// private key belongs to, so receivers can resolve the matching public key and pin actor types
 /// to components. Without one the token verifies as [`LEGACY_KID`].
 #[derive(Clone)]
-pub struct SignedContextSigner(Arc<TokenService>, Option<String>);
+pub struct SignedContextSigner(Arc<TokenService>, Option<String>, String, String);
+
+fn validate_context_scope(audience: &str, token_use: &str) -> Result<()> {
+    let valid = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':' | b'/')
+            })
+    };
+    if !valid(audience) || !valid(token_use) {
+        return Err(anyhow!("invalid signed context scope"));
+    }
+    Ok(())
+}
 
 impl SignedContextSigner {
     pub fn from_private_key(material: &str) -> Result<Self> {
@@ -498,7 +527,23 @@ impl SignedContextSigner {
                 INTERNAL_CONTEXT_TTL_SECS,
             )?),
             None,
+            INTERNAL_CONTEXT_AUDIENCE.into(),
+            TOKEN_USE_INTERNAL_CONTEXT.into(),
         ))
+    }
+
+    /// Use a dedicated workload audience and purpose with its separately provisioned key.
+    /// Receivers must opt into the same scope; default Cell contexts mutually reject it.
+    pub fn with_scope(
+        mut self,
+        audience: impl Into<String>,
+        token_use: impl Into<String>,
+    ) -> Result<Self> {
+        let (audience, token_use) = (audience.into(), token_use.into());
+        validate_context_scope(&audience, &token_use)?;
+        self.2 = audience;
+        self.3 = token_use;
+        Ok(self)
     }
 
     /// Declares the key id this signer's key is registered under at the receivers.
@@ -526,8 +571,8 @@ impl SignedContextSigner {
         let claims = SignedContextClaims {
             sub: identity.actor_id.clone(),
             iss: INTERNAL_CONTEXT_ISSUER.to_owned(),
-            aud: INTERNAL_CONTEXT_AUDIENCE.to_owned(),
-            token_use: TOKEN_USE_INTERNAL_CONTEXT.to_owned(),
+            aud: self.2.clone(),
+            token_use: self.3.clone(),
             iat: now,
             exp: now + INTERNAL_CONTEXT_TTL_SECS,
             jti: Uuid::new_v4().to_string(),
@@ -538,6 +583,7 @@ impl SignedContextSigner {
             credential_id: identity.credential_id.clone(),
             request_id: identity.request_id.clone(),
             org_id: identity.org_id.clone(),
+            organization_scope: identity.organization_scope.clone(),
             permission: identity.permission.clone(),
             perm_version: identity.perm_version,
             trace_id: identity.trace_id.clone(),
@@ -559,6 +605,8 @@ impl SignedContextSigner {
 pub struct SignedContextVerifier {
     keys: Arc<KeySet>,
     staff_kids: Option<Arc<[String]>>,
+    audience: String,
+    token_use: String,
 }
 
 impl SignedContextVerifier {
@@ -571,7 +619,23 @@ impl SignedContextVerifier {
         Self {
             keys: Arc::new(keys),
             staff_kids: None,
+            audience: INTERNAL_CONTEXT_AUDIENCE.into(),
+            token_use: TOKEN_USE_INTERNAL_CONTEXT.into(),
         }
+    }
+
+    /// Verify only this dedicated workload audience and purpose. This does not
+    /// trust caller identities: workloads still need a pinned key/source policy.
+    pub fn with_scope(
+        mut self,
+        audience: impl Into<String>,
+        token_use: impl Into<String>,
+    ) -> Result<Self> {
+        let (audience, token_use) = (audience.into(), token_use.into());
+        validate_context_scope(&audience, &token_use)?;
+        self.audience = audience;
+        self.token_use = token_use;
+        Ok(self)
     }
 
     /// [`KeySet::from_env`]; an error when neither variable is set.
@@ -617,7 +681,7 @@ impl SignedContextVerifier {
             .ok_or_else(|| anyhow!("unknown signed context key id"))?;
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.set_issuer(&[INTERNAL_CONTEXT_ISSUER]);
-        validation.set_audience(&[INTERNAL_CONTEXT_AUDIENCE]);
+        validation.set_audience(&[&self.audience]);
         validation.set_required_spec_claims(&[
             "sub",
             "iss",
@@ -636,7 +700,7 @@ impl SignedContextVerifier {
         let mut claims = decode::<SignedContextClaims>(token, key, &validation)?.claims;
         claims.kid = kid.unwrap_or(LEGACY_KID).to_owned();
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        claims.validate(now)?;
+        claims.validate(now, &self.audience, &self.token_use)?;
         if claims.actor_type == SignedActorType::Staff
             && let Some(allowed) = &self.staff_kids
             && !allowed.iter().any(|accepted| accepted == &claims.kid)
@@ -1140,6 +1204,52 @@ mod tests {
             signer.0.encoding_key.as_ref().unwrap(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn scoped_workload_contexts_mutually_reject_default_and_other_purposes() {
+        let (signer, verifier) = signed_context_services();
+        let workload_signer = signer
+            .clone()
+            .with_scope("identity-facts.v1", "workload_facts")
+            .unwrap();
+        let workload_verifier = verifier
+            .clone()
+            .with_scope("identity-facts.v1", "workload_facts")
+            .unwrap();
+        let identity = SignedContextIdentity::new(
+            SignedActorType::Service,
+            "social-hook",
+            "app-1",
+            "request-1",
+        );
+        let standard = signer.sign(&identity).unwrap();
+        let workload = workload_signer.sign(&identity).unwrap();
+        assert!(verifier.verify(&standard).is_ok());
+        assert!(workload_verifier.verify(&workload).is_ok());
+        assert!(verifier.verify(&workload).is_err());
+        assert!(workload_verifier.verify(&standard).is_err());
+        assert!(
+            workload_verifier
+                .clone()
+                .with_scope("other-audience", "workload_facts")
+                .unwrap()
+                .verify(&workload)
+                .is_err()
+        );
+        assert!(
+            workload_verifier
+                .with_scope("identity-facts.v1", "other_use")
+                .unwrap()
+                .verify(&workload)
+                .is_err()
+        );
+        assert!(signer.with_scope("", "workload_facts").is_err());
+        assert!(
+            verifier
+                .with_scope("identity facts", "workload_facts")
+                .is_err()
+        );
     }
 
     #[test]

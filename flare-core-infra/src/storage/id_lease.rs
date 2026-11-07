@@ -12,10 +12,10 @@ use std::{
 
 const EPOCH_MS: i64 = 1_704_067_200_000;
 const RESERVATION_MS: i64 = 30_000;
-/// NTP-synchronized hosts still differ from the DB clock by milliseconds. A local
-/// clock this far behind the DB fence waits until it passes the fence instead of
-/// failing; larger skew is still rejected and no ID is ever issued before `first`.
-const MAX_FENCE_LAG_MS: i64 = 1_000;
+/// Startup may see a small host/VM clock difference. Wait at most five seconds
+/// for the persisted DB fence, within the thirty-second reservation. Larger
+/// skew still fails closed; no ID is ever issued before `first`.
+const MAX_FENCE_LAG_MS: i64 = 5_000;
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum IdLeaseError {
@@ -103,6 +103,17 @@ fn now_ms() -> Result<i64, IdLeaseError> {
         .and_then(|v| i64::try_from(v.as_millis()).ok())
         .ok_or(IdLeaseError::Clock)
 }
+fn startup_fence_wait(now: i64, first: i64) -> Result<Duration, IdLeaseError> {
+    let lag = first.saturating_sub(now).max(0);
+    if lag > MAX_FENCE_LAG_MS {
+        return Err(IdLeaseError::Clock);
+    }
+    Ok(Duration::from_millis(if lag == 0 {
+        0
+    } else {
+        lag as u64 + 1
+    }))
+}
 fn table_name(table: &str) -> Result<String, IdLeaseError> {
     let parts: Vec<_> = table.split('.').collect();
     if parts.len() != 2
@@ -152,8 +163,9 @@ pub async fn acquire_id_lease(
     .map_err(|_| IdLeaseError::Unavailable)?
     .ok_or(IdLeaseError::Unavailable)?;
     let mut now = now_ms()?;
-    if now < first && first - now <= MAX_FENCE_LAG_MS {
-        tokio::time::sleep(Duration::from_millis((first - now) as u64 + 1)).await;
+    let wait = startup_fence_wait(now, first)?;
+    if !wait.is_zero() {
+        tokio::time::sleep(wait).await;
         now = now_ms()?;
     }
     // A materially skewed local clock cannot start issuing under a DB fence.
@@ -233,6 +245,27 @@ async fn renew_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn startup_wait_handles_vm_skew_without_issuing_before_the_fence() {
+        let first = EPOCH_MS + 60_000;
+        assert_eq!(startup_fence_wait(first, first).unwrap(), Duration::ZERO);
+        assert_eq!(
+            startup_fence_wait(first - 1_400, first).unwrap(),
+            Duration::from_millis(1_401)
+        );
+        assert_eq!(
+            startup_fence_wait(first - 5_000, first).unwrap(),
+            Duration::from_millis(5_001)
+        );
+        assert_eq!(
+            startup_fence_wait(first - 5_001, first),
+            Err(IdLeaseError::Clock)
+        );
+        assert_eq!(
+            generator(512, first, first + 30_000).next_at(first - 1),
+            Err(IdLeaseError::Inactive)
+        );
+    }
     fn generator(slot: u16, first: i64, until: i64) -> LeasedSnowflake {
         LeasedSnowflake {
             slot,
