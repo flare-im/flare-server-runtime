@@ -4,9 +4,21 @@
 //! sign the route's permission code into the Staff context it forwards; Core `admin-gateway`
 //! resolves `/api/v1/admin/<path>` with the same table to check that code. One table, so the two
 //! cannot drift: a route either exists here with its code, or it is not an admin route.
+//!
+//! A pattern under `/platform/` addresses no application: the partition serves it at
+//! `/admin/v1/<path without /platform>` and signs [`PLATFORM_SCOPE_TENANT`], never under
+//! `/admin/v1/apps/{app}/`.
 
 /// Core-side prefix of the admin surface (`admin-gateway`).
 pub const ADMIN_ROOT: &str = "/api/v1/admin";
+
+/// Tenant of a Staff context for a platform-scoped route ([`CoreAdminRoute::platform_scoped`]). The
+/// signed context always names one concrete application; this one stands for "no application". A
+/// receiver accepts it as platform scope only together with platform staff.
+pub const PLATFORM_SCOPE_TENANT: &str = "platform";
+
+/// Prefix of the platform-scoped patterns.
+const PLATFORM_SCOPE_PREFIX: &str = "/platform/";
 
 /// Permission codes of the Core admin surface, as the platform's permission catalog names them.
 pub mod permission {
@@ -21,8 +33,12 @@ pub mod permission {
     pub const CAPABILITIES_WRITE: &str = "core:capabilities:write";
     pub const PLUGINS_READ: &str = "core:plugins:read";
     pub const PLUGINS_WRITE: &str = "core:plugins:write";
+    /// The plugin registry: packages, version state and deployments serve every application.
+    pub const PLUGINS_PLATFORM_WRITE: &str = "core:plugins:platform:write";
     pub const HOOKS_READ: &str = "core:hooks:read";
     pub const HOOKS_WRITE: &str = "core:hooks:write";
+    /// Platform hooks (`tenant_id` empty): every application's messages go through them.
+    pub const HOOKS_PLATFORM_WRITE: &str = "core:hooks:platform:write";
     pub const MEDIAS_READ: &str = "core:medias:read";
     pub const MEDIAS_WRITE: &str = "core:medias:write";
     pub const GATEWAY_READ: &str = "core:gateway:read";
@@ -40,8 +56,10 @@ pub mod permission {
         CAPABILITIES_WRITE,
         PLUGINS_READ,
         PLUGINS_WRITE,
+        PLUGINS_PLATFORM_WRITE,
         HOOKS_READ,
         HOOKS_WRITE,
+        HOOKS_PLATFORM_WRITE,
         MEDIAS_READ,
         MEDIAS_WRITE,
         GATEWAY_READ,
@@ -70,6 +88,22 @@ pub struct CoreAdminRoute {
     pub write: bool,
     /// Only platform staff (no organization) may call it.
     pub platform_only: bool,
+}
+
+impl CoreAdminRoute {
+    /// Addresses no application: reachable only at the partition's platform paths, with
+    /// [`PLATFORM_SCOPE_TENANT`] as the signed tenant.
+    pub fn platform_scoped(&self) -> bool {
+        self.pattern.starts_with(PLATFORM_SCOPE_PREFIX)
+    }
+
+    /// The path below `/admin/v1` a platform-scoped route is served at (`/platform/hooks` is
+    /// `/hooks`); `None` for an application route.
+    pub fn platform_path(&self) -> Option<&'static str> {
+        self.pattern
+            .strip_prefix("/platform")
+            .filter(|_| self.platform_scoped())
+    }
 }
 
 const fn read(
@@ -110,6 +144,20 @@ const fn platform_write(
         pattern,
         permission,
         write: true,
+        platform_only: true,
+    }
+}
+
+const fn platform_read(
+    method: &'static str,
+    pattern: &'static str,
+    permission: &'static str,
+) -> CoreAdminRoute {
+    CoreAdminRoute {
+        method,
+        pattern,
+        permission,
+        write: false,
         platform_only: true,
     }
 }
@@ -158,8 +206,48 @@ pub const ROUTES: &[CoreAdminRoute] = &[
         CAPABILITIES_WRITE,
     ),
     read("GET", "/plugins", PLUGINS_READ),
-    platform_write("POST", "/plugins/register", PLUGINS_WRITE),
-    platform_write("POST", "/plugins/deregister", PLUGINS_WRITE),
+    // `plugin-registry`, because the partition serves platform routes under `/admin/v1/` and
+    // `/admin/v1/plugins/**` is the Social catalog.
+    platform_read("GET", "/platform/plugin-registry/versions", PLUGINS_READ),
+    platform_write(
+        "POST",
+        "/platform/plugin-registry/versions",
+        PLUGINS_PLATFORM_WRITE,
+    ),
+    platform_read(
+        "GET",
+        "/platform/plugin-registry/versions/{plugin_id}/{version}",
+        PLUGINS_READ,
+    ),
+    platform_write(
+        "PUT",
+        "/platform/plugin-registry/versions/{plugin_id}/{version}/state",
+        PLUGINS_PLATFORM_WRITE,
+    ),
+    platform_read("GET", "/platform/plugin-registry/deployments", PLUGINS_READ),
+    platform_write(
+        "POST",
+        "/platform/plugin-registry/deployments",
+        PLUGINS_PLATFORM_WRITE,
+    ),
+    // Development mode: Capability refuses both unless it was started with the switch.
+    platform_write(
+        "PUT",
+        "/platform/plugin-registry/dev-apps/{app_id}",
+        PLUGINS_PLATFORM_WRITE,
+    ),
+    write("POST", "/plugin-registry/dev", PLUGINS_WRITE),
+    read("GET", "/plugin-registry/status", PLUGINS_READ),
+    read(
+        "GET",
+        "/plugin-registry/bindings/{binding_id}/config",
+        PLUGINS_READ,
+    ),
+    write(
+        "PUT",
+        "/plugin-registry/bindings/{binding_id}/config",
+        PLUGINS_WRITE,
+    ),
     read("GET", "/hooks", HOOKS_READ),
     write("POST", "/hooks", HOOKS_WRITE),
     read("GET", "/hooks/{hook_id}", HOOKS_READ),
@@ -168,8 +256,32 @@ pub const ROUTES: &[CoreAdminRoute] = &[
     write("PUT", "/hooks/{hook_id}/status", HOOKS_WRITE),
     read("GET", "/hooks/{hook_id}/statistics", HOOKS_READ),
     read("GET", "/hooks/{hook_id}/executions", HOOKS_READ),
+    // Before `/platform/hooks/{hook_id}`: the first match wins and these segments are valid ids.
+    platform_read("GET", "/platform/hooks/points", HOOKS_READ),
+    platform_read("GET", "/platform/hooks/profiles", HOOKS_READ),
+    platform_write("POST", "/platform/hooks/test", HOOKS_PLATFORM_WRITE),
+    platform_read("GET", "/platform/hooks", HOOKS_READ),
+    platform_write("POST", "/platform/hooks", HOOKS_PLATFORM_WRITE),
+    platform_read("GET", "/platform/hooks/{hook_id}", HOOKS_READ),
+    platform_write("PUT", "/platform/hooks/{hook_id}", HOOKS_PLATFORM_WRITE),
+    platform_write("DELETE", "/platform/hooks/{hook_id}", HOOKS_PLATFORM_WRITE),
+    platform_write(
+        "PUT",
+        "/platform/hooks/{hook_id}/status",
+        HOOKS_PLATFORM_WRITE,
+    ),
+    platform_read("GET", "/platform/hooks/{hook_id}/statistics", HOOKS_READ),
+    platform_read("GET", "/platform/hooks/{hook_id}/executions", HOOKS_READ),
     read("GET", "/medias/objects", MEDIAS_READ),
     read("GET", "/medias/bucket", MEDIAS_READ),
+    read("GET", "/medias/upload-policy", MEDIAS_WRITE),
+    write("POST", "/medias/uploads/initiate", MEDIAS_WRITE),
+    read("GET", "/medias/uploads/{upload_id}", MEDIAS_WRITE),
+    write("POST", "/medias/uploads/presign-parts", MEDIAS_WRITE),
+    write("POST", "/medias/uploads/commit-parts", MEDIAS_WRITE),
+    write("POST", "/medias/uploads/complete", MEDIAS_WRITE),
+    write("POST", "/medias/uploads/abort", MEDIAS_WRITE),
+    read("GET", "/medias/files/{file_id}/url", MEDIAS_READ),
     write("POST", "/medias/cleanup-orphaned-assets", MEDIAS_WRITE),
     write("POST", "/medias/object-acl", MEDIAS_WRITE),
     // Plugin admin operations (Capability `dispatch_admin`) under the staff permission they
@@ -327,6 +439,8 @@ mod tests {
             ("GET", "/users/u/1/devices"),
             ("DELETE", "/conversations/c1"),
             ("POST", "/plugins"),
+            ("POST", "/plugins/register"),
+            ("POST", "/plugins/deregister"),
         ] {
             assert!(resolve(method, path).is_none(), "{method} {path}");
         }
@@ -347,11 +461,11 @@ mod tests {
             }
             assert_eq!(
                 route.platform_only,
-                route.pattern.starts_with("/plugins/"),
+                route.pattern.starts_with("/plugins/") || route.platform_scoped(),
                 "{}",
                 route.pattern
             );
-            if route.platform_only {
+            if route.pattern.starts_with("/plugins/") {
                 assert!(route.write);
             }
         }
@@ -361,7 +475,54 @@ mod tests {
                 .unwrap()
                 .write
         );
-        assert!(resolve("POST", "/plugins/register").unwrap().platform_only);
+    }
+
+    /// A platform hook write carries its own code, and every platform route is for platform staff.
+    #[test]
+    fn platform_hook_routes_are_platform_scoped_and_keep_the_static_segments() {
+        for (method, path, code) in [
+            ("GET", "/platform/hooks", permission::HOOKS_READ),
+            ("POST", "/platform/hooks", permission::HOOKS_PLATFORM_WRITE),
+            ("GET", "/platform/hooks/points", permission::HOOKS_READ),
+            ("GET", "/platform/hooks/profiles", permission::HOOKS_READ),
+            (
+                "POST",
+                "/platform/hooks/test",
+                permission::HOOKS_PLATFORM_WRITE,
+            ),
+            (
+                "GET",
+                "/platform/hooks/7/statistics",
+                permission::HOOKS_READ,
+            ),
+            (
+                "PUT",
+                "/platform/hooks/7/status",
+                permission::HOOKS_PLATFORM_WRITE,
+            ),
+        ] {
+            let route = resolve(method, path).unwrap();
+            assert_eq!(route.permission, code, "{method} {path}");
+            assert!(route.platform_only && route.platform_scoped(), "{path}");
+            assert_eq!(route.write, code == permission::HOOKS_PLATFORM_WRITE);
+        }
+        assert_eq!(
+            resolve("GET", "/platform/hooks/points").unwrap().pattern,
+            "/platform/hooks/points"
+        );
+        assert_eq!(
+            resolve("GET", "/platform/hooks/pre_send:audit")
+                .unwrap()
+                .pattern,
+            "/platform/hooks/{hook_id}"
+        );
+        assert_eq!(
+            resolve("GET", "/platform/hooks").unwrap().platform_path(),
+            Some("/hooks")
+        );
+        let application = resolve("GET", "/hooks").unwrap();
+        assert!(!application.platform_scoped());
+        assert_eq!(application.platform_path(), None);
     }
 
     #[test]
