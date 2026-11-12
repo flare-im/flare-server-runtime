@@ -190,6 +190,7 @@ pub const ROUTES: &[CoreAdminRoute] = &[
     ),
     read("GET", "/users/{user_id}/devices", USERS_READ),
     read("GET", "/users/{user_id}/presence", USERS_READ),
+    read("GET", "/users/{user_id}/push-traces", USERS_READ),
     write("POST", "/users/{user_id}/kick", USERS_KICK),
     write(
         "POST",

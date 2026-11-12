@@ -62,6 +62,7 @@
 
 ### 新增
 
+- 管理路由表新增 `GET /users/{user_id}/push-traces`（`core:users:read`）：按用户与消息查询推送决策链。
 - Ed25519 令牌：`TokenService::from_ed25519_private_key`（签发端）与
   `from_ed25519_public_key`（校验端，只持公钥，任何签发调用都会失败）；
   `generate_with_ed25519` 签发必带用途与受众的令牌，`validate_ed25519_with_use`
